@@ -43,6 +43,36 @@ init_din_keys()
 #if "cookie_accepted" not in st.session_state or not st.session_state.cookie_accepted:
  #   st.stop()
 
+def check_password():
+    """Zugangscode-Abfrage. Gibt True zurück, wenn der Code stimmt."""
+    def code_eingegeben():
+        eingabe = st.session_state.get("code_input", "")
+        gueltige_codes = st.secrets.get("access_codes", [])
+        if eingabe in gueltige_codes:
+            st.session_state["auth_ok"] = True
+            st.session_state["code_input"] = ""  # Code nicht im Speicher lassen
+        else:
+            st.session_state["auth_ok"] = False
+
+    if st.session_state.get("auth_ok", False):
+        return True
+
+    st.title("🔒 Bricklytics – Zugang")
+    st.text_input(
+        "Zugangscode eingeben",
+        type="password",
+        on_change=code_eingegeben,
+        key="code_input",
+    )
+    if "auth_ok" in st.session_state and not st.session_state["auth_ok"]:
+        st.error("❌ Ungültiger Zugangscode.")
+    st.info("Noch keinen Zugang? Schreib eine Mail an deine@mail.de")
+    return False
+
+
+if not check_password():
+    st.stop()
+
 import streamlit as st
 
 # --- Hier startet dein eigentliches Bricklytics Tool ---
