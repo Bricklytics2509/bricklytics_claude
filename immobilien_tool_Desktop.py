@@ -1440,108 +1440,94 @@ elif seite == "📊 Ergebnis (alte KPIs)":
     st.session_state.etf_differenz = differenz
 
 
-# 📁 Abschnitt 6: Projekt speichern & laden
+# 📁 Projektverwaltung – Download/Upload (cloud-tauglich)
 elif seite == "💽 Projektverwaltung":
-    st.title("💽 Projekt speichern, laden & löschen")
+    st.title("💽 Projekt speichern & laden")
+    st.caption(
+        "Projekte werden als Datei auf deinem eigenen Gerät gespeichert – "
+        "sie verlassen den Server nicht."
+    )
 
     import json
-    import os
-    import glob
 
-    os.makedirs("projekte", exist_ok=True)
+    # --- SPEICHERN (als Download) ---
+    st.subheader("💾 Aktuelles Projekt speichern")
+    projektname = st.text_input(
+        "🔖 Projektname",
+        value=st.session_state.get("projektname", "Mein Projekt"),
+    )
 
-    # Projektname eingeben
-    st.text_input("🔖 Projektname", key="projektname")
+    # Nur JSON-kompatible Typen (verhindert, dass TaxSettings-Objekte stören)
+    erlaubte_typen = (str, int, float, bool, list, dict)
+    data = {
+        k: v for k, v in st.session_state.items()
+        if not k.startswith("_") and isinstance(v, erlaubte_typen)
+    }
+    data["projektname"] = projektname
+    json_str = json.dumps(data, indent=4, ensure_ascii=False)
 
-    # Projekt speichern
-    if st.button("💾 Projekt speichern"):
-        if not st.session_state.projektname:
-            st.warning("⚠️ Bitte Projektnamen eingeben.")
-        else:
-            # 🔥 FIX: Nur JSON-kompatible Typen filtern
-            # Das verhindert, dass TaxSettings-Objekte die Datei korrumpieren
-            erlaubte_typen = (str, int, float, bool, list, dict)
-            data = {
-                k: v for k, v in st.session_state.items() 
-                if not k.startswith("_") and isinstance(v, erlaubte_typen)
-            }
-            
-            try:
-                with open(f"projekte/{st.session_state.projektname}.json", "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=4) # indent macht die Datei lesbar
-                st.success(f"✅ Projekt '{st.session_state.projektname}' gespeichert.")
-            except Exception as e:
-                st.error(f"❌ Fehler beim Speichern: {e}")
+    st.download_button(
+        "⬇️ Projekt herunterladen",
+        data=json_str.encode("utf-8"),
+        file_name=f"{projektname}.json",
+        mime="application/json",
+    )
 
     st.markdown("---")
 
-    # Bestehende Projekte anzeigen
-    project_files = glob.glob("projekte/*.json")
-    project_names = [os.path.basename(f).replace(".json", "") for f in project_files]
-
-    if project_names:
-        auswahl = st.selectbox("📂 Bestehendes Projekt auswählen:", project_names)
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if st.button("📂 Projekt laden"):
-                try:
-                    with open(f"projekte/{auswahl}.json", "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        # Wir löschen den State, aber behalten die Navigation/Namen bei Bedarf
-                        st.session_state.clear()
-                        for key, value in data.items():
-                            st.session_state[key] = value
-                    st.success(f"✅ Projekt '{auswahl}' erfolgreich geladen.")
-                    st.rerun()
-                except json.JSONDecodeError:
-                    st.error("❌ Die Datei ist beschädigt (unvollständig). Bitte lösche sie manuell.")
-                except Exception as e:
-                    st.error(f"❌ Fehler beim Laden: {e}")
-
-        with col2:
-            if st.button("🗑️ Projekt löschen"):
-                try:
-                    os.remove(f"projekte/{auswahl}.json")
-                    st.success(f"🗑️ Projekt '{auswahl}' gelöscht.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Fehler beim Löschen: {e}")
-    else:
-        st.info("ℹ️ Noch keine Projekte gespeichert.")
-
+    # --- LADEN (per Upload) ---
+    st.subheader("📂 Gespeichertes Projekt laden")
+    hochgeladen = st.file_uploader(
+        "Projekt-Datei (.json) auswählen", type=["json"], key="projekt_upload"
+    )
+    if hochgeladen is not None:
+        if st.button("📂 Dieses Projekt laden"):
+            try:
+                hochgeladen.seek(0)
+                geladen = json.load(hochgeladen)
+                st.session_state.clear()
+                for key, value in geladen.items():
+                    st.session_state[key] = value
+                st.success(f"✅ Projekt '{geladen.get('projektname', '?')}' geladen.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Fehler beim Laden: {e}")
 
 # === 📚 Vergleichsseite ===
+# === 📚 Vergleich – aus hochgeladenen Dateien ===
 elif seite == "📚 Vergleich":
-    import os
-    import glob
     import json
     from modules.vergleich import vergleichsuebersicht
 
     st.title("📚 Projektvergleich")
+    st.caption("Lade mehrere gespeicherte Projekt-Dateien hoch, um sie zu vergleichen.")
 
-    # Alle gespeicherten JSON-Projekte finden
-    pfade = glob.glob("projekte/*.json")
-    projekt_namen = [os.path.basename(p).replace(".json", "") for p in pfade]
+    dateien = st.file_uploader(
+        "Projekt-Dateien (.json) auswählen",
+        type=["json"],
+        accept_multiple_files=True,
+        key="vergleich_upload",
+    )
 
-    # Benutzer wählt Projekte
-    auswahl = st.multiselect("Projekte auswählen:", projekt_namen, default=projekt_namen[:2])
-
-    if not auswahl:
-        st.info("Bitte mindestens ein Projekt auswählen.")
+    if not dateien:
+        st.info("Bitte mindestens ein Projekt hochladen.")
     else:
         ausgewaehlt = []
-        for name in auswahl:
-            with open(f"projekte/{name}.json") as f:
+        for f in dateien:
+            try:
+                f.seek(0)
                 projekt = json.load(f)
-                projekt["projektname"] = name
+                projekt["projektname"] = projekt.get(
+                    "projektname", f.name.replace(".json", "")
+                )
                 ausgewaehlt.append(projekt)
+            except Exception as e:
+                st.error(f"❌ {f.name}: {e}")
 
-        df = vergleichsuebersicht(ausgewaehlt)
-        st.markdown("### 📊 Vergleichstabelle")
-        st.dataframe(df)
-
+        if ausgewaehlt:
+            df = vergleichsuebersicht(ausgewaehlt)
+            st.markdown("### 📊 Vergleichstabelle")
+            st.dataframe(df)
 
 # Seite 8: Haftungsausschluss
 elif seite == "⚖️ Disclaimer":
