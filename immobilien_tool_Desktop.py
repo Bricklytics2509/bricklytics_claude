@@ -3,12 +3,149 @@ import pandas as pd
 import json
 import os
 import glob
-
+import numpy as np
+import plotly.graph_objects as go
+ 
+ 
+class _StateProxy:
+    """Leichter Ersatz für st.session_state.
+ 
+    Damit die Heatmap berechne_cashflows() mit variierten Annahmen
+    durchrechnen kann, OHNE den echten Zustand der App zu verändern.
+    Unterstützt Attribut-Zugriff (proxy.zinssatz), .get() und das
+    Zurückschreiben von proxy.afa_linear_basis_startjahr7.
+    """
+ 
+    def __init__(self, data):
+        object.__setattr__(self, "_d", dict(data))  # flache Kopie -> isoliert
+ 
+    def __getattr__(self, name):
+        try:
+            return object.__getattribute__(self, "_d")[name]
+        except KeyError:
+            raise AttributeError(name)
+ 
+    def __setattr__(self, name, value):
+        object.__getattribute__(self, "_d")[name] = value
+ 
+    def get(self, key, default=None):
+        return object.__getattribute__(self, "_d").get(key, default)
+ 
+ 
+def _kpi_szenario(base_state, miete_pro_m2, wertsteigerung):
+    """Rechnet EIN Szenario durch.
+ 
+    Gibt (gesamtgewinn, ek_rendite_p_a) zurück.
+    ek_rendite ist np.nan, wenn kein sinnvoller CAGR bildbar ist
+    (Eigenkapital <= 0 oder Gesamtgewinn <= 0).
+    """
+    proxy = _StateProxy(base_state)
+    proxy.miete_pro_m2 = float(miete_pro_m2)
+    proxy.monatskaltmiete = float(proxy.wohnflaeche) * float(miete_pro_m2)
+    proxy.afa_linear_basis_startjahr7 = None  # Carryover je Szenario zurücksetzen
+ 
+    erg = berechne_cashflows(proxy)
+    kumuliert = erg["kumuliert"]
+    restschuld = erg["restschuld_bank"] + erg["restschuld_kfw"]
+    ek = float(proxy.eigenkapital)
+    kaufpreis = float(proxy.kaufpreis)
+ 
+    verkaufspreis = kaufpreis * ((1 + wertsteigerung) ** 10)
+    gesamtgewinn = verkaufspreis - restschuld - ek + kumuliert
+ 
+    if ek > 0 and gesamtgewinn > 0:
+        ek_rendite = (gesamtgewinn / ek) ** (1 / 10) - 1
+    else:
+        ek_rendite = np.nan
+ 
+    return gesamtgewinn, ek_rendite
+ 
+ 
+def _heatmap_farbe(v, vmin, vmax):
+    """Rot -> Gelb -> Grün, normalisiert zwischen vmin und vmax."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "background-color:#2b2b2b; color:#777;"
+    t = 0.5 if vmax <= vmin else (v - vmin) / (vmax - vmin)
+    t = max(0.0, min(1.0, t))
+    if t < 0.5:                      # rot -> gelb
+        r, g, b = 200, int(70 + 130 * (t / 0.5)), 60
+    else:                            # gelb -> grün
+        r, g, b = int(200 - 140 * ((t - 0.5) / 0.5)), 180, 70
+    return f"background-color: rgb({r},{g},{b}); color:#111; font-weight:600;"
+ 
+ 
+def _kpi_card(titel, wert_str, farbe, sub):
+    """Eine farbige KPI-Kachel fürs Cockpit (HTML)."""
+    return (
+        f'<div style="flex:1; min-width:160px; background:{farbe}; '
+        f'border-radius:14px; padding:16px 18px; color:#fff;">'
+        f'<div style="font-size:0.78rem; opacity:0.85;">{titel}</div>'
+        f'<div style="font-size:1.6rem; font-weight:700; margin-top:4px;">{wert_str}</div>'
+        f'<div style="font-size:0.76rem; opacity:0.92; margin-top:3px;">{sub}</div>'
+        f'</div>'
+    )
+ 
+ 
+# Farbpalette (Ampel)
+_GRUEN = "#1f7a3d"
+_GELB = "#b58a00"
+_ROT = "#a12b2b"
+ 
 
 from modules.afa_steuer import berechne_afa_und_steuer
 from modules.cashflow_berechnung import berechne_cashflows
 from modules.vergleich import vergleichsuebersicht
 from modules.steuer import TaxSettings
+
+
+def _verlauf_daten(base_state, wertsteigerung, etf_rendite):
+    """Jahr-für-Jahr, Immobilie vs. ETF, Jahr 0–10.
+
+    Liefert für beide Ansichten die Werte zurück:
+      - Gewinn  (Eigenkapital abgezogen)
+      - Vermögen (absolut)
+    ETF nutzt dieselbe Zuzahlungs-/Steuerlogik wie die Cockpit-Kachel.
+    """
+    proxy = _StateProxy(base_state)
+    proxy.afa_linear_basis_startjahr7 = None
+    erg = berechne_cashflows(proxy)
+    cfd = erg["cashflowdaten"]
+
+    ek = float(proxy.eigenkapital)
+    kaufpreis = float(proxy.kaufpreis)
+    restschuld = float(proxy.kreditbetrag) + (
+        float(proxy.kfw_betrag) if proxy.get("zweiter_kredit_aktiv", False) else 0.0
+    )
+
+    # Zuzahlung wie in der Kachel: Gesamt-Cashflow gleichmäßig auf 120 Monate
+    kumuliert_final = cfd[-1]["Kumuliert"]
+    zusatz_pa = (abs(kumuliert_final) / (10 * 12)) * 12 if kumuliert_final < 0 else 0.0
+
+    jahre = [0]
+    immo_verm, etf_verm = [ek], [ek]        # Vermögen startet beim eingesetzten EK
+    immo_gew, etf_gew = [0.0], [0.0]        # Gewinn startet bei 0
+
+    for j in range(1, 11):
+        jahre.append(j)                      # 👈 DIESE ZEILE fehlt
+        row = cfd[j - 1]
+        restschuld = max(restschuld - (abs(row["Tilgung Bank"]) + abs(row["Tilgung KfW"])), 0.0)
+        kum_cashflow = row["Kumuliert"]
+
+        # --- Immobilie ---
+        objektwert = kaufpreis * ((1 + wertsteigerung) ** j)
+        v_immo = objektwert - restschuld + kum_cashflow   # Vermögen (Netto-Position)
+        immo_verm.append(v_immo)
+        immo_gew.append(v_immo - ek)                       # Gewinn = Vermögen − Einsatz
+
+        # --- ETF (EK + aufgezinste Zuzahlungen, dann 25 % Steuer auf Gewinn) ---
+        etf_vor = ek * ((1 + etf_rendite) ** j)
+        etf_vor += sum(zusatz_pa * ((1 + etf_rendite) ** (j - k)) for k in range(1, j + 1))
+        etf_gewinn_roh = (etf_vor - ek) * 0.75             # Steuer nur auf den Gewinn
+        v_etf = ek + etf_gewinn_roh                        # Vermögen = Einsatz + Netto-Gewinn
+        etf_verm.append(v_etf)
+        etf_gew.append(etf_gewinn_roh)
+
+    return jahre, immo_verm, etf_verm, immo_gew, etf_gew
 
 # ---------------------------------------------
 # einmalige Defaults für die §7b/DIN-277 Seite
@@ -43,36 +180,6 @@ init_din_keys()
 #if "cookie_accepted" not in st.session_state or not st.session_state.cookie_accepted:
  #   st.stop()
 
-def check_password():
-    """Zugangscode-Abfrage. Gibt True zurück, wenn der Code stimmt."""
-    def code_eingegeben():
-        eingabe = st.session_state.get("code_input", "")
-        gueltige_codes = st.secrets.get("access_codes", [])
-        if eingabe in gueltige_codes:
-            st.session_state["auth_ok"] = True
-            st.session_state["code_input"] = ""  # Code nicht im Speicher lassen
-        else:
-            st.session_state["auth_ok"] = False
-
-    if st.session_state.get("auth_ok", False):
-        return True
-
-    st.title("🔒 Bricklytics – Zugang")
-    st.text_input(
-        "Zugangscode eingeben",
-        type="password",
-        on_change=code_eingegeben,
-        key="code_input",
-    )
-    if "auth_ok" in st.session_state and not st.session_state["auth_ok"]:
-        st.error("❌ Ungültiger Zugangscode.")
-    st.info("Noch keinen Zugang? Schreib eine Mail an deine@mail.de")
-    return False
-
-
-if not check_password():
-    st.stop()
-
 import streamlit as st
 
 # --- Hier startet dein eigentliches Bricklytics Tool ---
@@ -89,6 +196,7 @@ seite = st.sidebar.radio("Gehe zu", [
     "🧮 Baukostenprüfung §7b",
     "💸 Cashflow",
     "📊 Ergebnis",
+    "📊 Ergebnis (alte KPIs)",
     "💽 Projektverwaltung",
     "📚 Vergleich",
     "⚖️ Disclaimer"
@@ -752,7 +860,357 @@ elif seite == "💸 Cashflow":
 
 #5  📊 Ergebnis
 elif seite == "📊 Ergebnis":
+    
+        
     st.title("📊 Ergebnis")
+    
+    # --- Pflicht-Basisdaten prüfen (verhindert Absturz bei Direkteinstieg) ---
+    if "herstellungskosten" not in st.session_state or "monatskaltmiete" not in st.session_state:
+        st.warning("⚠️ Bitte zuerst die Seiten 'Basisdaten' und 'Finanzierung' ausfüllen.")
+        st.stop()
+    
+    # --- Defaults absichern (falls Nutzer die Steuer-Seite übersprungen hat) ---
+    st.session_state.setdefault("afa_satz_degressiv", 0.05)
+    st.session_state.setdefault("afa_satz_linear", 0.03)
+    st.session_state.setdefault("afa_degressiv_switch_year", 7)
+    st.session_state.setdefault("afa_linear_basis_startjahr7", None)
+    st.session_state.setdefault("afa_option", "5% (Neubau ab 01.10.23)")
+    st.session_state.setdefault("sonder_afa_effizienzhaus", False)
+    st.session_state.setdefault("verwaltungskosten_monatlich", 50.0)
+    st.session_state.setdefault("instandhaltung_monatlich", 60.0)
+    
+    # --- Annahme: Wertsteigerung (steuert Verkaufspreis) ---
+    wertsteigerung_pro_jahr = st.number_input(
+        "Angenommene jährliche Wertsteigerung (%)", value=1.0
+    ) / 100
+    
+    # --- Basis-Szenario einmal rechnen ---
+    ergebnisse = berechne_cashflows(st.session_state)
+    kumuliert = ergebnisse["kumuliert"]
+    kumulierte_steuerersparnis = ergebnisse["kumulierte_steuerersparnis"]
+    restschuld = ergebnisse["restschuld_bank"] + ergebnisse["restschuld_kfw"]
+    gesamt_tilgung = ergebnisse["gesamt_tilgung_bank"] + ergebnisse["gesamt_tilgung_kfw"]
+    
+    ek = float(st.session_state.eigenkapital)
+    kaufpreis = float(st.session_state.kaufpreis)
+    monatskaltmiete = float(st.session_state.monatskaltmiete)
+    
+    verkaufspreis = kaufpreis * ((1 + wertsteigerung_pro_jahr) ** 10)
+    gesamtgewinn = verkaufspreis - restschuld - ek + kumuliert
+    
+    # --- ETF-Szenario wählen (steuert die Vergleichskachel) ---
+    etf_optionen = ["3% (defensiv)", "5% (konservativ)", "7% (offensiv)", "Eigener Wert"]
+    st.session_state.etf_option = st.radio(
+        "📈 ETF-Vergleich – erwartete Rendite p.a.:",
+        etf_optionen,
+        index=etf_optionen.index(st.session_state.get("etf_option", "5% (konservativ)")),
+        horizontal=True,
+        key="etf_option_radio_ergebnis",
+    )
+    if st.session_state.etf_option == "Eigener Wert":
+        st.session_state.etf_rendite_eigen = st.number_input(
+            "Eigene ETF-Rendite p.a. (%)",
+            value=float(st.session_state.get("etf_rendite_eigen", 6.0)),
+            step=0.5,
+        )
+        etf_rendite = st.session_state.etf_rendite_eigen / 100
+    else:
+        etf_rendite = float(st.session_state.etf_option[:1]) / 100
+
+    etf_basis = ek
+
+
+    if kumuliert < 0:
+        zusatzmonatlich = abs(kumuliert) / (10 * 12)
+        zusatzwert = sum(
+            zusatzmonatlich * 12 * ((1 + etf_rendite) ** (10 - j)) for j in range(1, 11)
+        )
+    else:
+        zusatzmonatlich, zusatzwert = 0.0, 0.0
+    etf_wert_nach_steuer = (etf_basis * ((1 + etf_rendite) ** 10) + zusatzwert) * 0.75
+    etf_gewinn_10 = etf_wert_nach_steuer - ek        # ETF als Gewinn (EK abgezogen)
+    immo_vs_etf = gesamtgewinn - etf_gewinn_10       # faire Differenz (Gewinn vs. Gewinn)
+    # --- Kern-Kennzahlen für das Cockpit ---
+    cashflow_mtl_j1 = ergebnisse["cashflowdaten"][0]["Cashflow nach Steuer"] / 12.0
+    cashflow_mtl_schnitt = (kumuliert / 10.0) / 12.0  # Ø über 10 Jahre, inkl. Steuerwirkung
+    ek_rendite = (gesamtgewinn / ek) ** (1 / 10) - 1 if (ek > 0 and gesamtgewinn > 0) else None
+    jahreskaltmiete = monatskaltmiete * 12.0
+    bruttorendite = (jahreskaltmiete / kaufpreis) * 100 if kaufpreis else 0.0
+    
+    # =========================== COCKPIT (oben) ================================
+    st.markdown("## 🎯 Auf einen Blick")
+    
+    # 1) Cashflow monatlich – Ø über 10 Jahre bestimmt die Ampel
+    if cashflow_mtl_schnitt >= 0:
+        cf_farbe, cf_sub = _GRUEN, "trägt sich im Schnitt selbst"
+    elif cashflow_mtl_schnitt >= -150:
+        cf_farbe, cf_sub = _GELB, "leichte Zuzahlung im Schnitt"
+    else:
+        cf_farbe, cf_sub = _ROT, "spürbare Zuzahlung im Schnitt"
+    
+    # 2) EK-Rendite p.a. (CAGR über 10 J)
+    if ek_rendite is None:
+        ekr_farbe, ekr_str, ekr_sub = _ROT, "negativ", "Verlust auf das Eigenkapital"
+    elif ek_rendite >= 0.08:
+        ekr_farbe, ekr_str, ekr_sub = _GRUEN, f"{ek_rendite*100:.1f} % p.a.", "starke Verzinsung"
+    elif ek_rendite >= 0.05:
+        ekr_farbe, ekr_str, ekr_sub = _GELB, f"{ek_rendite*100:.1f} % p.a.", "solide, Luft nach oben"
+    else:
+        ekr_farbe, ekr_str, ekr_sub = _ROT, f"{ek_rendite*100:.1f} % p.a.", "schwache Verzinsung"
+    
+    # 3) Immobilie vs. ETF
+    if immo_vs_etf > 0:
+        etf_farbe, etf_str, etf_sub = _GRUEN, f"+{immo_vs_etf:,.0f} €", "Immobilie schlägt den ETF"
+    else:
+        etf_farbe, etf_str, etf_sub = _ROT, f"{immo_vs_etf:,.0f} €", "ETF wäre besser gewesen"
+    
+    # 4) Bruttorendite (Markt-Einordnung, 1. Jahr)
+    if bruttorendite < 3:
+        br_farbe, br_sub = _ROT, "sehr gering (<3 %)"
+    elif bruttorendite < 4:
+        br_farbe, br_sub = _GELB, "eher gering (3–4 %)"
+    elif bruttorendite < 5:
+        br_farbe, br_sub = _GRUEN, "solide (4–5 %)"
+    else:
+        br_farbe, br_sub = _GRUEN, "attraktiv (>5 %)"
+    
+    cards = "".join([
+        _kpi_card(
+            "Cashflow / Monat",
+            f"{cashflow_mtl_schnitt:,.0f} €",
+            cf_farbe,
+            f"Ø 10 J · 1. Jahr: {cashflow_mtl_j1:,.0f} €",
+        ),
+        _kpi_card("Eigenkapital-Rendite", ekr_str, ekr_farbe, ekr_sub),
+        _kpi_card("Immobilie vs. ETF (10 J)", etf_str, etf_farbe, etf_sub),
+        _kpi_card("Bruttorendite (1. Jahr)", f"{bruttorendite:.2f} %", br_farbe, br_sub),
+    ])
+    st.markdown(
+        f'<div style="display:flex; gap:12px; flex-wrap:wrap;">{cards}</div>',
+        unsafe_allow_html=True,
+    )
+    def _info_card(titel, wert_str):
+        return (
+            f'<div style="flex:1; min-width:150px; background:#1e222b; '
+            f'border:1px solid #2c313c; border-radius:12px; padding:14px 16px;">'
+            f'<div style="font-size:0.74rem; color:#8b94a3; text-transform:uppercase; '
+            f'letter-spacing:0.03em;">{titel}</div>'
+            f'<div style="font-size:1.35rem; font-weight:700; color:#e8ebf0; '
+            f'margin-top:4px;">{wert_str}</div>'
+            f'</div>'
+        )
+
+    info_cards = "".join([
+        _info_card("Verkaufspreis (Jahr 10)", f"{verkaufspreis:,.0f} €"),
+        _info_card("Gesamtgewinn", f"{gesamtgewinn:,.0f} €"),
+        _info_card("Restschuld", f"{restschuld:,.0f} €"),
+        _info_card("Getilgt", f"{gesamt_tilgung:,.0f} €"),
+    ])
+    st.markdown(
+        f'<div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">'
+        f'{info_cards}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "ℹ️ Steuerrückzahlungen und -nachzahlungen laufen der Kapitalanlage "
+        "ca. 1 Jahr hinterher – der absolute Cashflow im 1. Jahr ist daher nur "
+        "näherungsweise zu betrachten. Steuerwirkungen sind immer individuell und "
+        "sollten durch einen Steuerberater geprüft werden."
+    )
+    
+    # =========================== HEATMAP (Szenarien) ===========================
+    st.markdown("## 🔥 Szenario-Analyse")
+    st.markdown(
+        "Wie robust ist dein Ergebnis, wenn **Miete** und **Wertsteigerung** anders "
+        "laufen als geplant? Grün = gut, Rot = schwach."
+    )
+
+    metrik = st.radio(
+        "Farbe zeigt:",
+        ["EK-Rendite p.a.", "Gesamtgewinn (10 J)"],   # EK-Rendite ist jetzt Standard
+        horizontal=True,
+    )
+    ist_gewinn = metrik.startswith("Gesamt")
+
+    # Achsen: Miete/m² (um aktuellen Wert) × Wertsteigerung 0–4 %
+    base_state = dict(st.session_state)
+    m0 = float(st.session_state.miete_pro_m2)
+    miete_werte = [round(m0 + d, 1) for d in (-2, -1, 0, 1, 2)]
+    miete_werte = [m for m in miete_werte if m > 0]
+    wert_werte = [0.0, 0.01, 0.02, 0.03, 0.04]
+
+    daten = []
+    for m in miete_werte:
+        zeile = []
+        for w in wert_werte:
+            gewinn, rendite = _kpi_szenario(base_state, m, w)
+            zeile.append(gewinn if ist_gewinn else rendite)
+        daten.append(zeile)
+
+    df_hm = pd.DataFrame(
+        daten,
+        index=[f"{m:.1f} €/m²" for m in miete_werte],
+        columns=[f"+{w*100:.0f}% Wert" for w in wert_werte],
+    )
+    df_hm.index.name = "Miete/m²"
+
+    # --- Aktuelles Basis-Szenario zum Markieren bestimmen ---
+    base_miete = round(m0, 1)
+    base_row = f"{base_miete:.1f} €/m²"
+    base_w = min(wert_werte, key=lambda w: abs(w - wertsteigerung_pro_jahr))
+    base_col = f"+{base_w*100:.0f}% Wert"
+
+    # --- Farbskala: absolut (Rendite) vs. relativ (Gewinn) ---
+    if ist_gewinn:
+        _fin = df_hm.values.astype(float)
+        _fin = _fin[np.isfinite(_fin)]
+        _vmin, _vmax = (float(_fin.min()), float(_fin.max())) if _fin.size else (0.0, 1.0)
+    else:
+        _vmin, _vmax = 0.0, 0.10   # feste Skala: 0 % … 10 % p.a.
+
+    def _style_hm(frame):
+        styled = pd.DataFrame("", index=frame.index, columns=frame.columns)
+        for i in frame.index:
+            for c in frame.columns:
+                css = _heatmap_farbe(frame.loc[i, c], _vmin, _vmax)
+                if i == base_row and c == base_col:
+                    css += " outline: 3px solid #ffffff; outline-offset: -3px;"
+                styled.loc[i, c] = css
+        return styled
+
+    if ist_gewinn:
+        _fmt = lambda v: "–" if pd.isna(v) else f"{v:,.0f} €"
+    else:
+        _fmt = lambda v: "–" if pd.isna(v) else f"{v*100:.1f} %"
+
+    st.markdown(
+        f"**{'Gesamtgewinn' if ist_gewinn else 'EK-Rendite p.a.'} nach 10 Jahren**  ·  "
+        "Zeilen = **Miete pro m²**, Spalten = **jährliche Wertsteigerung**"
+    )
+
+    styler = (
+        df_hm.style
+        .apply(_style_hm, axis=None)
+        .format(_fmt)
+        .set_table_styles([
+            {"selector": "th",
+             "props": [("padding", "6px 10px"), ("text-align", "center"),
+                       ("color", "#ddd"), ("font-weight", "600"),
+                       ("background-color", "#1e1e1e")]},
+            {"selector": "td",
+             "props": [("padding", "8px 12px"), ("text-align", "right")]},
+            {"selector": "table",
+             "props": [("border-collapse", "collapse"), ("width", "100%"),
+                       ("font-size", "0.95rem")]},
+        ])
+    )
+    st.markdown(styler.to_html(), unsafe_allow_html=True)
+
+    if ist_gewinn:
+        st.caption(
+            f"⬜ Weiß umrandet = dein aktuelles Szenario ({base_row}, "
+            f"+{base_w*100:.0f}% Wertsteigerung).  ·  Farben hier **relativ** zur "
+            "Tabelle (heller/dunkler), da „gut“ vom eingesetzten Eigenkapital abhängt."
+        )
+    else:
+        st.caption(
+            f"⬜ Weiß umrandet = dein aktuelles Szenario ({base_row}, "
+            f"+{base_w*100:.0f}% Wertsteigerung).  ·  Feste Farbskala: "
+            "unter ~5 % rötlich, ~5 % gelb, ab ~8 % grün."
+        )
+
+    st.caption(
+        "Hinweis: Der monatliche Cashflow im 1. Jahr hängt NICHT von der "
+        "Wertsteigerung ab – deshalb zeigt die Heatmap bewusst Gesamtgewinn "
+        "bzw. EK-Rendite über 10 Jahre."
+    )
+
+    # =========================== VERLAUFS-CHART ===============================
+    st.markdown("## 📈 Immobilie vs. ETF über 10 Jahre")
+
+    ansicht = st.radio(
+        "Ansicht:",
+        ["Vermögen (absolut)", "Gewinn (Einsatz abgezogen)"],
+        horizontal=True,
+    )
+    ist_vermoegen = ansicht.startswith("Vermögen")
+
+    jahre, immo_verm, etf_verm, immo_gew, etf_gew = _verlauf_daten(
+        dict(st.session_state), wertsteigerung_pro_jahr, etf_rendite
+    )
+    immo_linie = immo_verm if ist_vermoegen else immo_gew
+    etf_linie = etf_verm if ist_vermoegen else etf_gew
+
+    if ist_vermoegen:
+        st.caption("Absolutes Vermögen am Jahresende – beide starten beim eingesetzten Eigenkapital.")
+    else:
+        st.caption("Gewinn nach Abzug des eingesetzten Eigenkapitals – beide starten bei 0 €.")
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=jahre, y=immo_linie, name="Immobilie",
+        mode="lines+markers", line=dict(color="#2e7d32", width=3),
+        hovertemplate="Jahr %{x}<br>Immobilie: %{y:,.0f} €<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=jahre, y=etf_linie, name="ETF",
+        mode="lines+markers", line=dict(color="#1565c0", width=3, dash="dot"),
+        hovertemplate="Jahr %{x}<br>ETF: %{y:,.0f} €<extra></extra>",
+    ))
+    fig.add_hline(y=0, line=dict(color="#888", width=1))
+    fig.update_layout(
+        template="plotly_dark", height=420,
+        margin=dict(l=10, r=10, t=30, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        xaxis_title="Jahr", yaxis_title=("Vermögen (€)" if ist_vermoegen else "Gewinn (€)"),
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+    # Break-even-Hinweis: Ab wann liegt die Immobilie vorn?
+    kreuzung = next((j for j, i, e in zip(jahre, immo_verm, etf_verm) if j > 0 and i >= e), None)
+    if kreuzung:
+        st.caption(f"🎯 Ab Jahr {kreuzung} liegt die Immobilie vor dem ETF.")
+    else:
+        st.caption("📉 In diesem Szenario bleibt der ETF über die 10 Jahre vorn.")
+    
+    # =========================== DETAILS (ausklappbar) =========================
+    with st.expander("📋 Alle Detailwerte anzeigen"):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("**Objekt & Miete**")
+            st.metric("Kaufpreis", f"{kaufpreis:,.0f} €")
+            st.metric("Nebenkosten", f"{st.session_state.nebenkosten:,.0f} €")
+            st.metric("Wohnfläche", f"{st.session_state.wohnflaeche:,.1f} m²")
+            st.metric("Kaltmiete mtl.", f"{monatskaltmiete:,.0f} €")
+            st.metric("Kaufpreisfaktor", f"{(kaufpreis/jahreskaltmiete):.1f}" if jahreskaltmiete else "–")
+        with c2:
+            st.markdown("**Finanzierung**")
+            st.metric("Eigenkapital", f"{ek:,.0f} €")
+            st.metric("Getilgt gesamt", f"{gesamt_tilgung:,.0f} €")
+            st.metric("Restschuld gesamt", f"{restschuld:,.0f} €")
+            st.metric("Kumulierte Cashflows", f"{kumuliert:,.0f} €")
+            st.metric("Gesparte Steuern", f"{kumulierte_steuerersparnis:,.0f} €")
+        with c3:
+            st.markdown("**Ergebnis & ETF**")
+            st.metric("Verkaufspreis (Jahr 10)", f"{verkaufspreis:,.0f} €")
+            st.metric("Gesamtgewinn", f"{gesamtgewinn:,.0f} €")
+            st.metric("ETF-Wert nach Steuer", f"{etf_wert_nach_steuer:,.0f} €")
+            st.metric("Immobilie − ETF", f"{immo_vs_etf:,.0f} €")
+    
+    # --- Export-Werte für andere Seiten (Vergleich etc.) ---
+    st.session_state.restschuld = restschuld
+    st.session_state.gesamt_tilgung = gesamt_tilgung
+    st.session_state.kumuliert = kumuliert
+    st.session_state.verkaufspreis = verkaufspreis
+    st.session_state.gesamtgewinn = gesamtgewinn
+    st.session_state.etf_wert_nach_steuer = etf_wert_nach_steuer
+    st.session_state.etf_differenz = immo_vs_etf
+    
+#5  📊 Ergebnis
+elif seite == "📊 Ergebnis (alte KPIs)":    
+    st.title("📊 Ergebnis (alte KPIs)")
 
     if "herstellungskosten" not in st.session_state or "monatskaltmiete" not in st.session_state:
         st.warning("⚠️ Bitte zuerst die Seiten 'Basisdaten' und 'Finanzierung' ausfüllen.")
@@ -947,9 +1405,6 @@ elif seite == "📊 Ergebnis":
     st.session_state.etf_wert_vor_steuer = etf_wert_vor_steuer
     st.session_state.etf_wert_nach_steuer = etf_wert_nach_steuer
     st.session_state.etf_differenz = differenz
-
-
-
 
 
 # 📁 Abschnitt 6: Projekt speichern & laden
