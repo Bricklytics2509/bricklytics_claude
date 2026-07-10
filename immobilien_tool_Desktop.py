@@ -110,6 +110,7 @@ def _pdf_clean(txt):
         str(txt)
         .replace("€", " EUR")
         .replace("²", "2")
+        .replace("—", "-")   # 👈 NEU: Geviertstrich
         .replace("–", "-")
         .replace("’", "'")
     )
@@ -135,7 +136,7 @@ def _pdf_grid(pdf, title, items, y, col_w=90, row_h=6, label_w=42):
  
  
 def _pdf_bericht(objekt_name, objekt_items, finanzierung_items, steuer_items,
-                  kpis, ergebnis_items, etf_label, etf_rendite):
+                  kpis, ergebnis_items, etf_label, etf_rendite, etf_wert_nach_steuer):
     from fpdf import FPDF
     import datetime
  
@@ -202,11 +203,12 @@ def _pdf_bericht(objekt_name, objekt_items, finanzierung_items, steuer_items,
     y = _pdf_grid(pdf, "Ergebnis nach 10 Jahren", ergebnis_items, y, label_w=48)
  
     # --- ETF-Hinweis ---
-    pdf.set_xy(15, y - 4)
-    pdf.set_font("Helvetica", "I", 9)
     pdf.multi_cell(
         180, 5,
-        _pdf_clean(f"ETF-Vergleichsszenario: {etf_label} ({etf_rendite*100:.1f} % p.a.)"),
+        _pdf_clean(
+            f"ETF-Vergleichsszenario: {etf_label} ({etf_rendite*100:.1f} % p.a.) "
+            f"→ ETF-Wert nach Steuer (10 J): {etf_wert_nach_steuer:,.0f} EUR"
+        ),
     )
  
     # --- Footer ---
@@ -300,6 +302,28 @@ def init_din_keys():
 
 init_din_keys()
 
+TAX_DEFAULTS = {
+    "tax_year": 2026,
+    "filing_status": "single",
+    "soli_aktiv": True,
+    "kist_aktiv": False,
+    "kist_state": "BY",
+    "zve_ohne_immo": 80000.0,
+}
+
+def init_tax_defaults():
+    for k, v in TAX_DEFAULTS.items():
+        st.session_state.setdefault(k, v)
+    if "tax_settings_obj" not in st.session_state or st.session_state["tax_settings_obj"] is None:
+        st.session_state["tax_settings_obj"] = TaxSettings(
+            year=st.session_state["tax_year"],
+            filing_status=st.session_state["filing_status"],
+            solidarity_surcharge=st.session_state["soli_aktiv"],
+            church_tax=st.session_state["kist_aktiv"],
+            church_tax_state=st.session_state["kist_state"],
+        )
+
+init_tax_defaults()
 
 # --- Cookie Hinweis hier ---
 #if "cookie_accepted" not in st.session_state:
@@ -1502,6 +1526,11 @@ elif seite == "📊 Ergebnis":
     )
 
     # --- Objektdaten ---
+    if st.session_state.get("mietmodell") == "Staffelmiete (€/Monat pro Jahr)":
+        miete_wachstum_text = f"+{st.session_state.get('staffel_eur_monat', 0):.0f} EUR/Monat p.a. (Staffel)"
+    else:
+        miete_wachstum_text = f"{st.session_state.get('mietsteigerung_prozent', 0):.1f} % p.a."
+
     objekt_items = [
         ("Kaufpreis", f"{kaufpreis:,.0f} EUR"),
         ("Wohnfläche", f"{st.session_state.wohnflaeche:,.1f} m2"),
@@ -1509,24 +1538,31 @@ elif seite == "📊 Ergebnis":
         ("Kaltmiete mtl.", f"{monatskaltmiete:,.0f} EUR"),
         ("Nebenkosten", f"{st.session_state.nebenkosten:,.0f} EUR"),
         ("Bundesland", st.session_state.bundesland),
+        ("Wertsteigerung p.a.", f"{wertsteigerung_pro_jahr*100:.1f} %"),
+        ("Mietentwicklung", miete_wachstum_text),
     ]
 
     # --- Finanzierung ---
     kfw_aktiv = st.session_state.get("zweiter_kredit_aktiv", False)
-    kredit_gesamt = st.session_state.kreditbetrag + (st.session_state.kfw_betrag if kfw_aktiv else 0.0)
-    rate_gesamt_monatlich = (st.session_state.rate + st.session_state.get("kfw_rate", 0.0)) / 12.0
-    kfw_text = (
-        f"{st.session_state.kfw_betrag:,.0f} EUR à {st.session_state.kfw_zins_anzeige:.2f} %"
-        if kfw_aktiv else "nicht genutzt"
-    )
+    rate_bank_mtl = st.session_state.rate / 12.0
+
     finanzierung_items = [
         ("Eigenkapital", f"{ek:,.0f} EUR"),
-        ("Kreditbetrag (gesamt)", f"{kredit_gesamt:,.0f} EUR"),
+        ("Bankdarlehen", f"{st.session_state.kreditbetrag:,.0f} EUR"),
         ("Zinssatz (Bank)", f"{st.session_state.zinssatz_anzeige:.2f} %"),
         ("Tilgungssatz (Bank)", f"{st.session_state.tilgungssatz_anzeige:.2f} %"),
-        ("Monatl. Rate (gesamt)", f"{rate_gesamt_monatlich:,.0f} EUR"),
-        ("2. Darlehen (KfW)", kfw_text),
+        ("Monatl. Rate (Bank)", f"{rate_bank_mtl:,.0f} EUR"),
     ]
+    if kfw_aktiv:
+        rate_kfw_mtl = st.session_state.get("kfw_rate", 0.0) / 12.0
+        finanzierung_items += [
+            ("2. Darlehen (KfW)", f"{st.session_state.kfw_betrag:,.0f} EUR"),
+            ("Zinssatz (KfW)", f"{st.session_state.kfw_zins_anzeige:.2f} %"),
+            ("Tilgungssatz (KfW)", f"{st.session_state.kfw_tilgung_anzeige:.2f} %"),
+            ("Monatl. Rate (KfW)", f"{rate_kfw_mtl:,.0f} EUR"),
+        ]
+    rate_gesamt_monatlich = (st.session_state.rate + st.session_state.get("kfw_rate", 0.0)) / 12.0
+    finanzierung_items.append(("Monatl. Rate (gesamt)", f"{rate_gesamt_monatlich:,.0f} EUR"))
 
     # --- Steuerliche Annahmen ---
     veranlagung_text = (
@@ -1570,6 +1606,7 @@ elif seite == "📊 Ergebnis":
         ergebnis_items=ergebnis_items,
         etf_label=st.session_state.etf_option,
         etf_rendite=etf_rendite,
+        etf_wert_nach_steuer=etf_wert_nach_steuer,  
     )
 
     st.download_button(
