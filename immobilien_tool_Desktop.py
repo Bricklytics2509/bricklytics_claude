@@ -225,6 +225,7 @@ seite = st.sidebar.radio("Gehe zu", [
     "🏠 Startseite",
     "📋 Basisdaten",
     "💶 Finanzierung",
+     "🏦 Kapitaldienstfähigkeit",   # 👈 neu
     "📈 Steuer",
     "🧮 Baukostenprüfung §7b",
     "💸 Cashflow",
@@ -543,6 +544,137 @@ elif seite == "💶 Finanzierung":
     st.markdown("#### 💰 Gesamtrate beider Darlehen")
     st.write(f"💸 Monatliche Gesamtrate: **{gesamt_rate / 12:,.2f} €**")
     st.write(f"💸 Jährliche Gesamtrate: **{gesamt_rate:,.2f} €**")
+ 
+#Seite Kapitaldeinstfähigkeit
+elif seite == "🏦 Kapitaldienstfähigkeit":
+    st.title("🏦 Kapitaldienstfähigkeit")
+    st.caption(
+        "Bankensicht: Kann dieser Kredit neben den laufenden Lebenshaltungskosten "
+        "getragen werden? Diese Rechnung ist eine Näherung – jede Bank hat eigene "
+        "Pauschalen und Stress-Annahmen."
+    )
+
+    if ("herstellungskosten" not in st.session_state or "monatskaltmiete" not in st.session_state
+            or "kreditbetrag" not in st.session_state):
+        st.warning("⚠️ Bitte zuerst die Seiten 'Basisdaten' und 'Finanzierung' ausfüllen.")
+        st.stop()
+
+    st.markdown("### 📥 Haushaltsdaten")
+
+    st.session_state.setdefault("hh_nettoeinkommen", 5000.0)
+    st.session_state.setdefault("hh_haushaltsgroesse", "2 Erwachsene")
+    st.session_state.setdefault("hh_lebenshaltung", 2600.0)
+    st.session_state.setdefault("hh_aktuelle_wohnkosten", 0.0)
+    st.session_state.setdefault("hh_sonstige_raten", 0.0)
+    st.session_state.setdefault("hh_anrechnungssatz", 75)
+    st.session_state.setdefault("hh_stresszins", 5.5)
+
+    st.session_state.hh_nettoeinkommen = st.number_input(
+        "Haushaltsnettoeinkommen (mtl., alle Personen zusammen)",
+        value=float(st.session_state.hh_nettoeinkommen), step=100.0,
+    )
+
+    lebenshaltung_defaults = {
+        "1 Erwachsener": 1300.0,
+        "2 Erwachsene": 2600.0,
+        "2 Erwachsene + Kind(er)": 3200.0,
+    }
+    hg = st.selectbox(
+        "Haushaltsgröße (setzt Vorschlagswert für Lebenshaltung)",
+        list(lebenshaltung_defaults.keys()),
+        index=list(lebenshaltung_defaults.keys()).index(st.session_state.hh_haushaltsgroesse),
+    )
+    if hg != st.session_state.hh_haushaltsgroesse:
+        st.session_state.hh_lebenshaltung = lebenshaltung_defaults[hg]
+    st.session_state.hh_haushaltsgroesse = hg
+
+    st.session_state.hh_lebenshaltung = st.number_input(
+        "Lebenshaltungspauschale (mtl.)",
+        value=float(st.session_state.hh_lebenshaltung), step=50.0,
+        help="Bankübliche Pauschale für Lebensunterhalt – variiert je Institut.",
+    )
+    st.session_state.hh_aktuelle_wohnkosten = st.number_input(
+        "Aktuelle Wohnkosten (mtl., z.B. eigene Miete – 0 falls entfällt)",
+        value=float(st.session_state.hh_aktuelle_wohnkosten), step=50.0,
+    )
+    st.session_state.hh_sonstige_raten = st.number_input(
+        "Sonstige Kreditraten / Unterhaltszahlungen (mtl.)",
+        value=float(st.session_state.hh_sonstige_raten), step=50.0,
+    )
+    st.session_state.hh_anrechnungssatz = st.slider(
+        "Anrechnungssatz Mieteinnahmen (bankueblich 70-80 %)",
+        min_value=50, max_value=100, value=int(st.session_state.hh_anrechnungssatz),
+    )
+
+    # --- Werte aus anderen Seiten ziehen ---
+    kapitaldienst_mtl = (float(st.session_state.rate) + float(st.session_state.get("kfw_rate", 0.0))) / 12.0
+    bewirtschaftung_mtl = (
+        float(st.session_state.get("verwaltungskosten_monatlich", 0.0))
+        + float(st.session_state.get("instandhaltung_monatlich", 0.0))
+    )
+    angerechnete_miete = float(st.session_state.monatskaltmiete) * (st.session_state.hh_anrechnungssatz / 100.0)
+
+    einnahmen = st.session_state.hh_nettoeinkommen + angerechnete_miete
+    ausgaben = (
+        st.session_state.hh_lebenshaltung
+        + st.session_state.hh_aktuelle_wohnkosten
+        + st.session_state.hh_sonstige_raten
+        + bewirtschaftung_mtl
+        + kapitaldienst_mtl
+    )
+    ueberschuss = einnahmen - ausgaben
+    ueberschuss_quote = (ueberschuss / st.session_state.hh_nettoeinkommen * 100) if st.session_state.hh_nettoeinkommen else 0.0
+
+    st.markdown("### 📊 Haushaltsrechnung")
+    tabelle = [
+        {"Position": "Haushaltsnettoeinkommen", "Betrag": f"+ {st.session_state.hh_nettoeinkommen:,.0f} €"},
+        {"Position": f"Angerechnete Kaltmiete ({st.session_state.hh_anrechnungssatz:.0f} %)", "Betrag": f"+ {angerechnete_miete:,.0f} €"},
+        {"Position": "Summe Einnahmen", "Betrag": f"{einnahmen:,.0f} €"},
+        {"Position": "Lebenshaltungspauschale", "Betrag": f"- {st.session_state.hh_lebenshaltung:,.0f} €"},
+        {"Position": "Aktuelle Wohnkosten", "Betrag": f"- {st.session_state.hh_aktuelle_wohnkosten:,.0f} €"},
+        {"Position": "Sonstige Raten/Unterhalt", "Betrag": f"- {st.session_state.hh_sonstige_raten:,.0f} €"},
+        {"Position": "Bewirtschaftung (nicht umlagefähig)", "Betrag": f"- {bewirtschaftung_mtl:,.0f} €"},
+        {"Position": "Kapitaldienst neue Finanzierung", "Betrag": f"- {kapitaldienst_mtl:,.0f} €"},
+        {"Position": "Monatlicher Überschuss", "Betrag": f"{ueberschuss:,.0f} €"},
+    ]
+    st.dataframe(pd.DataFrame(tabelle).set_index("Position"), use_container_width=True)
+
+    if ueberschuss < 0:
+        st.error(f"🔴 Unterdeckung: {ueberschuss:,.0f} € / Monat – Finanzierung mit diesen Annahmen nicht tragbar.")
+    elif ueberschuss_quote < 15:
+        st.warning(f"🟡 Knapper Überschuss: {ueberschuss:,.0f} € / Monat ({ueberschuss_quote:.0f} % vom Netto) – wenig Puffer.")
+    else:
+        st.success(f"🟢 Komfortabler Überschuss: {ueberschuss:,.0f} € / Monat ({ueberschuss_quote:.0f} % vom Netto).")
+
+    # --- Stresstest: höherer Zinssatz ---
+    st.markdown("### ⚠️ Stresstest: höherer Zinssatz")
+    st.caption("Wie tragfähig wäre die Finanzierung bei einem höheren Zinssatz (z. B. Anschlussfinanzierung)?")
+    st.session_state.hh_stresszins = st.number_input(
+        "Angenommener Stress-Zinssatz (%)",
+        value=float(st.session_state.hh_stresszins), step=0.5,
+    )
+    kfw_aktiv = st.session_state.get("zweiter_kredit_aktiv", False)
+    kredit_gesamt_heute = float(st.session_state.kreditbetrag) + (float(st.session_state.kfw_betrag) if kfw_aktiv else 0.0)
+    rate_stress_mtl = kredit_gesamt_heute * (st.session_state.hh_stresszins / 100 + float(st.session_state.tilgungssatz)) / 12
+    ueberschuss_stress = einnahmen - (
+        st.session_state.hh_lebenshaltung + st.session_state.hh_aktuelle_wohnkosten
+        + st.session_state.hh_sonstige_raten + bewirtschaftung_mtl + rate_stress_mtl
+    )
+    st.write(
+        f"Bei **{st.session_state.hh_stresszins:.2f} %** Zins auf den heutigen Kreditbetrag "
+        f"({kredit_gesamt_heute:,.0f} €) läge die Rate bei **{rate_stress_mtl:,.0f} € / Monat** "
+        f"statt aktuell **{kapitaldienst_mtl:,.0f} € / Monat** – Überschuss dann: "
+        f"**{ueberschuss_stress:,.0f} € / Monat**."
+    )
+    if ueberschuss_stress < 0:
+        st.error("🔴 Im Stress-Szenario wäre die Finanzierung nicht mehr tragbar.")
+    else:
+        st.success("🟢 Auch im Stress-Szenario bleibt ein positiver Überschuss.")
+
+    st.caption(
+        "ℹ️ Banken nutzen eigene, teils strengere Pauschalen und Stresstest-Methoden. "
+        "Diese Rechnung dient der Ersteinschätzung und ersetzt keine Bankprüfung."
+    )
 
 # Seite 3: Steuerrechnung
 elif seite == "📈 Steuer":
