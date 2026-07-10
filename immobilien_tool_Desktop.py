@@ -1485,9 +1485,15 @@ elif seite == "💽 Projektverwaltung":
             try:
                 hochgeladen.seek(0)
                 geladen = json.load(hochgeladen)
+
+                # Login-Status über das Leeren hinweg retten
+                auth = st.session_state.get("auth_ok", False)
+
                 st.session_state.clear()
                 for key, value in geladen.items():
                     st.session_state[key] = value
+                 
+                st.session_state["auth_ok"] = auth   # Login wiederherstellen
                 st.success(f"✅ Projekt '{geladen.get('projektname', '?')}' geladen.")
                 st.rerun()
             except Exception as e:
