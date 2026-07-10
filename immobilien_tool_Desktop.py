@@ -201,16 +201,19 @@ def _pdf_bericht(objekt_name, objekt_items, finanzierung_items, steuer_items,
  
     y = y_kpi + box_h + 10
     y = _pdf_grid(pdf, "Ergebnis nach 10 Jahren", ergebnis_items, y, label_w=48)
- 
+
     # --- ETF-Hinweis ---
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.set_xy(15, y)   # explizit auf neue Zeile setzen – verhindert "Anhängen" an letzte Zelle
     pdf.multi_cell(
         180, 5,
         _pdf_clean(
             f"ETF-Vergleichsszenario: {etf_label} ({etf_rendite*100:.1f} % p.a.) "
-            f"→ ETF-Wert nach Steuer (10 J): {etf_wert_nach_steuer:,.0f} EUR"
+            f"-> ETF-Wert nach Steuer (10 J): {etf_wert_nach_steuer:,.0f} EUR"
         ),
     )
- 
+    y_footer_start = pdf.get_y() + 6
+
     # --- Footer ---
     pdf.set_xy(15, 270)
     pdf.set_draw_color(200, 200, 200)
