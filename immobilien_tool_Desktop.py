@@ -99,6 +99,135 @@ from modules.cashflow_berechnung import berechne_cashflows
 from modules.vergleich import vergleichsuebersicht
 from modules.steuer import TaxSettings
 
+def _hex_to_rgb(hexfarbe):
+    h = hexfarbe.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+ 
+ 
+def _pdf_clean(txt):
+    """Ersetzt €/² durch PDF-sichere Zeichen (Kernschrift kann sie nicht)."""
+    txt = (
+        str(txt)
+        .replace("€", " EUR")
+        .replace("²", "2")
+        .replace("–", "-")
+        .replace("’", "'")
+    )
+    return txt.encode("latin-1", "replace").decode("latin-1")
+ 
+ 
+def _pdf_grid(pdf, title, items, y, col_w=90, row_h=6, label_w=42):
+    """Zeichnet eine Titel-Zeile + Label:Wert-Grid (2 Spalten). Gibt neue y zurück."""
+    pdf.set_xy(15, y)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 7, _pdf_clean(title), ln=True)
+    y2 = y + 8
+    for i, (label, val) in enumerate(items):
+        col, row = i % 2, i // 2
+        x = 15 + col * col_w
+        pdf.set_xy(x, y2 + row * row_h)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(label_w, row_h, _pdf_clean(label + ":"))
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(col_w - label_w - 2, row_h, _pdf_clean(val))
+    rows = (len(items) + 1) // 2
+    return y2 + rows * row_h + 8
+ 
+ 
+def _pdf_bericht(objekt_name, objekt_items, finanzierung_items, steuer_items,
+                  kpis, ergebnis_items, etf_label, etf_rendite):
+    from fpdf import FPDF
+    import datetime
+ 
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=False)
+    pdf.add_page()
+ 
+    # --- Kopfbereich ---
+    pdf.set_fill_color(30, 34, 43)
+    pdf.rect(0, 0, 210, 26, style="F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_xy(15, 7)
+    pdf.set_font("Helvetica", "B", 19)
+    pdf.cell(0, 8, _pdf_clean("Bricklytics — Investment-Check"))
+    pdf.set_xy(15, 17)
+    pdf.set_font("Helvetica", "", 10)
+    heute = datetime.date.today().strftime("%d.%m.%Y")
+    pdf.cell(0, 6, _pdf_clean(f"{objekt_name}   |   Stand: {heute}"))
+    pdf.set_text_color(20, 20, 20)
+ 
+    y = 34
+    y = _pdf_grid(pdf, "Objektdaten", objekt_items, y)
+    y = _pdf_grid(pdf, "Finanzierung", finanzierung_items, y)
+    y = _pdf_grid(pdf, "Steuerliche Annahmen", steuer_items, y)
+ 
+    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.set_text_color(120, 120, 120)
+    pdf.set_xy(15, y - 4)
+    pdf.multi_cell(
+        180, 3.2,
+        _pdf_clean(
+            "Die steuerliche Wirkung im Ergebnis basiert auf diesen Annahmen und "
+            "ist eine Näherung – die individuelle Veranlagung kann abweichen."
+        ),
+    )
+    pdf.set_text_color(20, 20, 20)
+ 
+    # --- KPI-Kacheln ---
+    y_kpi = y + 4
+    pdf.set_xy(15, y_kpi)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 7, _pdf_clean("Auf einen Blick"), ln=True)
+    y_kpi += 8
+ 
+    box_w, box_h, gap = 42, 26, 3
+    for i, k in enumerate(kpis):
+        x = 15 + i * (box_w + gap)
+        r, g, b = _hex_to_rgb(k["farbe"])
+        pdf.set_fill_color(r, g, b)
+        pdf.rect(x, y_kpi, box_w, box_h, style="F")
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_xy(x + 2.5, y_kpi + 2.5)
+        pdf.set_font("Helvetica", "", 7.5)
+        pdf.multi_cell(box_w - 5, 3.2, _pdf_clean(k["titel"]))
+        pdf.set_xy(x + 2.5, y_kpi + 9)
+        pdf.set_font("Helvetica", "B", 12.5)
+        pdf.cell(box_w - 5, 6, _pdf_clean(k["wert"]))
+        pdf.set_xy(x + 2.5, y_kpi + 17)
+        pdf.set_font("Helvetica", "", 6.8)
+        pdf.multi_cell(box_w - 5, 3, _pdf_clean(k["sub"]))
+    pdf.set_text_color(20, 20, 20)
+ 
+    y = y_kpi + box_h + 10
+    y = _pdf_grid(pdf, "Ergebnis nach 10 Jahren", ergebnis_items, y, label_w=48)
+ 
+    # --- ETF-Hinweis ---
+    pdf.set_xy(15, y - 4)
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.multi_cell(
+        180, 5,
+        _pdf_clean(f"ETF-Vergleichsszenario: {etf_label} ({etf_rendite*100:.1f} % p.a.)"),
+    )
+ 
+    # --- Footer ---
+    pdf.set_xy(15, 270)
+    pdf.set_draw_color(200, 200, 200)
+    pdf.line(15, 268, 195, 268)
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(120, 120, 120)
+    pdf.multi_cell(
+        180, 3.6,
+        _pdf_clean(
+            "Diese Zusammenfassung dient ausschließlich Informationszwecken und "
+            "stellt keine Finanz-, Steuer- oder Anlageberatung dar. Steuerliche "
+            "Effekte sind individuell und sollten durch einen Steuerberater "
+            "geprüft werden. Erstellt mit Bricklytics."
+        ),
+    )
+ 
+    raw = pdf.output()
+    return bytes(raw) if not isinstance(raw, str) else raw.encode("latin-1")
+ 
 
 def _verlauf_daten(base_state, wertsteigerung, etf_rendite):
     """Jahr-für-Jahr, Immobilie vs. ETF, Jahr 0–10.
@@ -128,7 +257,7 @@ def _verlauf_daten(base_state, wertsteigerung, etf_rendite):
     immo_gew, etf_gew = [0.0], [0.0]        # Gewinn startet bei 0
 
     for j in range(1, 11):
-        jahre.append(j)                      # 👈 DIESE ZEILE fehlt
+        jahre.append(j)                     
         row = cfd[j - 1]
         restschuld = max(restschuld - (abs(row["Tilgung Bank"]) + abs(row["Tilgung KfW"])), 0.0)
         kum_cashflow = row["Kumuliert"]
@@ -1363,7 +1492,94 @@ elif seite == "📊 Ergebnis":
             st.metric("Gesamtgewinn", f"{gesamtgewinn:,.0f} €")
             st.metric("ETF-Wert nach Steuer", f"{etf_wert_nach_steuer:,.0f} €")
             st.metric("Immobilie − ETF", f"{immo_vs_etf:,.0f} €")
-    
+
+    # --- PDF-Report ---
+    st.markdown("## 📄 PDF-Bericht")
+    objekt_name = st.text_input(
+        "Objektbezeichnung (erscheint im Bericht)",
+        value=st.session_state.get("objekt_name_pdf", "Immobilie"),
+        key="objekt_name_pdf",
+    )
+
+    # --- Objektdaten ---
+    objekt_items = [
+        ("Kaufpreis", f"{kaufpreis:,.0f} EUR"),
+        ("Wohnfläche", f"{st.session_state.wohnflaeche:,.1f} m2"),
+        ("Miete / m2", f"{st.session_state.miete_pro_m2:,.2f} EUR"),
+        ("Kaltmiete mtl.", f"{monatskaltmiete:,.0f} EUR"),
+        ("Nebenkosten", f"{st.session_state.nebenkosten:,.0f} EUR"),
+        ("Bundesland", st.session_state.bundesland),
+    ]
+
+    # --- Finanzierung ---
+    kfw_aktiv = st.session_state.get("zweiter_kredit_aktiv", False)
+    kredit_gesamt = st.session_state.kreditbetrag + (st.session_state.kfw_betrag if kfw_aktiv else 0.0)
+    rate_gesamt_monatlich = (st.session_state.rate + st.session_state.get("kfw_rate", 0.0)) / 12.0
+    kfw_text = (
+        f"{st.session_state.kfw_betrag:,.0f} EUR à {st.session_state.kfw_zins_anzeige:.2f} %"
+        if kfw_aktiv else "nicht genutzt"
+    )
+    finanzierung_items = [
+        ("Eigenkapital", f"{ek:,.0f} EUR"),
+        ("Kreditbetrag (gesamt)", f"{kredit_gesamt:,.0f} EUR"),
+        ("Zinssatz (Bank)", f"{st.session_state.zinssatz_anzeige:.2f} %"),
+        ("Tilgungssatz (Bank)", f"{st.session_state.tilgungssatz_anzeige:.2f} %"),
+        ("Monatl. Rate (gesamt)", f"{rate_gesamt_monatlich:,.0f} EUR"),
+        ("2. Darlehen (KfW)", kfw_text),
+    ]
+
+    # --- Steuerliche Annahmen ---
+    veranlagung_text = (
+        "Zusammenveranlagung" if st.session_state.get("filing_status") == "joint"
+        else "Einzelveranlagung"
+    )
+    afa_kurz = st.session_state.get("afa_option", "–").split(" ")[0]
+    if st.session_state.get("sonder_afa_effizienzhaus", False):
+        afa_kurz += " + EH40"
+    steuer_items = [
+        ("Veranlagung", veranlagung_text),
+        ("zvE ohne Immobilie", f"{st.session_state.get('zve_ohne_immo', 0):,.0f} EUR/Jahr"),
+        ("Steuerjahr", str(st.session_state.get("tax_year", "–"))),
+        ("AfA-Modell", afa_kurz),
+        ("Solidaritätszuschlag", "berücksichtigt" if st.session_state.get("soli_aktiv") else "nicht berücksichtigt"),
+        ("Kirchensteuer", "berücksichtigt" if st.session_state.get("kist_aktiv") else "nicht berücksichtigt"),
+    ]
+
+    # --- KPI-Kacheln (aus dem Cockpit oben) ---
+    pdf_kpis = [
+        {"titel": "Cashflow / Monat", "wert": f"{cashflow_mtl_schnitt:,.0f} EUR", "sub": cf_sub, "farbe": cf_farbe},
+        {"titel": "Eigenkapital-Rendite", "wert": ekr_str, "sub": ekr_sub, "farbe": ekr_farbe},
+        {"titel": "Immobilie vs. ETF", "wert": etf_str, "sub": etf_sub, "farbe": etf_farbe},
+        {"titel": "Bruttorendite (1. Jahr)", "wert": f"{bruttorendite:.2f} %", "sub": br_sub, "farbe": br_farbe},
+    ]
+
+    # --- Ergebnis nach 10 Jahren ---
+    ergebnis_items = [
+        ("Verkaufspreis (Jahr 10)", f"{verkaufspreis:,.0f} EUR"),
+        ("Gesamtgewinn", f"{gesamtgewinn:,.0f} EUR"),
+        ("Restschuld", f"{restschuld:,.0f} EUR"),
+        ("Getilgt (gesamt)", f"{gesamt_tilgung:,.0f} EUR"),
+    ]
+
+    pdf_bytes = _pdf_bericht(
+        objekt_name=objekt_name,
+        objekt_items=objekt_items,
+        finanzierung_items=finanzierung_items,
+        steuer_items=steuer_items,
+        kpis=pdf_kpis,
+        ergebnis_items=ergebnis_items,
+        etf_label=st.session_state.etf_option,
+        etf_rendite=etf_rendite,
+    )
+
+    st.download_button(
+        "📄 PDF-Bericht herunterladen",
+        data=pdf_bytes,
+        file_name=f"Bricklytics_{objekt_name.replace(' ', '_')}.pdf",
+        mime="application/pdf",
+    )
+
+ 
     # --- Export-Werte für andere Seiten (Vergleich etc.) ---
     st.session_state.restschuld = restschuld
     st.session_state.gesamt_tilgung = gesamt_tilgung
