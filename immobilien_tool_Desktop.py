@@ -7,7 +7,33 @@ import os
 import glob
 import numpy as np
 import plotly.graph_objects as go
- 
+
+st.set_page_config(page_title="Bricklytics", page_icon="🏠", layout="wide")
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+html, body, [data-testid="stAppViewContainer"], [data-testid="stMarkdownContainer"] {
+    font-family: 'Inter', sans-serif !important;
+}
+
+[data-testid="stToolbar"] { visibility: hidden; }
+[data-testid="stDecoration"] { display: none; }
+
+.stButton > button, [data-testid="stDownloadButton"] button {
+    border-radius: 10px !important;
+    background-color: #1f7a3d !important;
+    color: white !important;
+    border: none !important;
+    padding: 0.5rem 1.2rem !important;
+    font-weight: 600 !important;
+}
+.stButton > button:hover { background-color: #16612f !important; }
+
+[data-testid="stSidebar"] { background-color: #14161c; }
+</style>
+""", unsafe_allow_html=True)
  
 class _StateProxy:
     """Leichter Ersatz für st.session_state.
@@ -337,40 +363,6 @@ init_tax_defaults()
 #
 #if "cookie_accepted" not in st.session_state or not st.session_state.cookie_accepted:
  #   st.stop()
-
-st.set_page_config(page_title="Bricklytics", page_icon="🏠", layout="wide")
-
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-
-/* Streamlit-Branding ausblenden */
-#MainMenu, footer, header { visibility: hidden; }
-
-/* Buttons */
-.stButton > button {
-    border-radius: 10px;
-    background-color: #1f7a3d;
-    color: white;
-    border: none;
-    padding: 0.5rem 1.2rem;
-    font-weight: 600;
-}
-.stButton > button:hover { background-color: #16612f; }
-
-/* Karten-Look für Container */
-div[data-testid="stVerticalBlock"] > div:has(> div.stMetric) {
-    background: #1e222b;
-    border-radius: 14px;
-    padding: 14px;
-}
-
-/* Sidebar dunkler, konsistent zur Cockpit-Optik */
-section[data-testid="stSidebar"] { background-color: #14161c; }
-</style>
-""", unsafe_allow_html=True)
 
 def check_password():
     """Zugangscode-Abfrage. Gibt True zurück, wenn der Code stimmt."""
