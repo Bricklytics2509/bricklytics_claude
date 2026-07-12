@@ -122,7 +122,7 @@ GRUNDERWERBSTEUER = {
     "Saarland": 6.5,
     "Schleswig-Holstein": 6.5,
 }
-BUNDESLAENDER = list(GRUNDERWERBSTEUER.keys())
+BUNDESLAENDER = sorted(GRUNDERWERBSTEUER.keys())
 
 from modules.afa_steuer import berechne_afa_und_steuer
 from modules.cashflow_berechnung import berechne_cashflows
