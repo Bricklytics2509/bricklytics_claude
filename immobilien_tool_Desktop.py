@@ -9,31 +9,6 @@ import numpy as np
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Bricklytics", page_icon="🏠", layout="wide")
-
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-
-* {
-    font-family: 'Inter', sans-serif !important;
-}
-
-[data-testid="stToolbar"] { visibility: hidden; }
-[data-testid="stDecoration"] { display: none; }
-
-.stButton > button, [data-testid="stDownloadButton"] button {
-    border-radius: 10px !important;
-    background-color: #1f7a3d !important;
-    color: white !important;
-    border: none !important;
-    padding: 0.5rem 1.2rem !important;
-    font-weight: 600 !important;
-}
-.stButton > button:hover { background-color: #16612f !important; }
-
-[data-testid="stSidebar"] { background-color: #14161c; }
-</style>
-""", unsafe_allow_html=True)
  
 class _StateProxy:
     """Leichter Ersatz für st.session_state.
