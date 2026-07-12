@@ -277,10 +277,11 @@ def _verlauf_daten(base_state, wertsteigerung, etf_rendite):
         # --- ETF (EK + aufgezinste Zuzahlungen, dann 25 % Steuer auf Gewinn) ---
         etf_vor = ek * ((1 + etf_rendite) ** j)
         etf_vor += sum(zusatz_pa * ((1 + etf_rendite) ** (j - k)) for k in range(1, j + 1))
-        etf_gewinn_roh = (etf_vor - ek) * 0.75             # Steuer nur auf den Gewinn
-        v_etf = ek + etf_gewinn_roh                        # Vermögen = Einsatz + Netto-Gewinn
+        eingezahlt_bis_j = ek + zusatz_pa * j
+        etf_gewinn_brutto = etf_vor - eingezahlt_bis_j    # Zuzahlungen selbst sind KEIN Gewinn
+        v_etf = eingezahlt_bis_j + etf_gewinn_brutto * 0.75
         etf_verm.append(v_etf)
-        etf_gew.append(etf_gewinn_roh)
+        etf_gew.append(v_etf - ek)   # bewusst konsistent mit immo_gew (nur EK-Basis)
 
     return jahre, immo_verm, etf_verm, immo_gew, etf_gew
 
@@ -1248,9 +1249,12 @@ elif seite == "📊 Ergebnis":
         )
     else:
         zusatzmonatlich, zusatzwert = 0.0, 0.0
-    etf_wert_nach_steuer = (etf_basis * ((1 + etf_rendite) ** 10) + zusatzwert) * 0.75
-    etf_gewinn_10 = etf_wert_nach_steuer - ek        # ETF als Gewinn (EK abgezogen)
-    immo_vs_etf = gesamtgewinn - etf_gewinn_10       # faire Differenz (Gewinn vs. Gewinn)
+    etf_brutto = etf_basis * ((1 + etf_rendite) ** 10) + zusatzwert
+    etf_eingezahlt = etf_basis + zusatzmonatlich * 12 * 10   # EK + eingezahlte Sparraten
+    etf_wert_nach_steuer = etf_eingezahlt + (etf_brutto - etf_eingezahlt) * 0.75
+    etf_gewinn_10 = etf_wert_nach_steuer - etf_eingezahlt    # Gewinn relativ zum GESAMTEN Einsatz
+    immo_vs_etf = gesamtgewinn - etf_gewinn_10
+ 
     # --- Kern-Kennzahlen für das Cockpit ---
     cashflow_mtl_j1 = ergebnisse["cashflowdaten"][0]["Cashflow nach Steuer"] / 12.0
     cashflow_mtl_schnitt = (kumuliert / 10.0) / 12.0  # Ø über 10 Jahre, inkl. Steuerwirkung
@@ -1799,14 +1803,19 @@ elif seite == "📊 Ergebnis (alte KPIs)":
                 zusatzwert += zusatzmonatlich * 12 * ((1 + etf_rendite) ** (10 - jahr))
 
         etf_wert_vor_steuer = etf_basis * ((1 + etf_rendite) ** 10) + zusatzwert
-        etf_wert_nach_steuer = etf_wert_vor_steuer * 0.75
+        etf_eingezahlt = etf_basis + zusatzmonatlich * 12 * 10        # EK + alle Sparraten
+        etf_gewinn_brutto = etf_wert_vor_steuer - etf_eingezahlt      # nur der Zuwachs
+        etf_wert_nach_steuer = etf_eingezahlt + etf_gewinn_brutto * 0.75  # Steuer NUR auf Gewinn
+        etf_gewinn = etf_wert_nach_steuer - etf_eingezahlt             # Gewinn ggü. Gesamteinsatz
 
         st.metric("Startkapital", f"{etf_basis:,.0f} €")
         st.metric("Sparrate mtl.", f"{zusatzmonatlich:,.0f} €")
+        st.metric("Eingezahlt gesamt", f"{etf_eingezahlt:,.0f} €")
         st.metric("ETF-Wert vor Steuer", f"{etf_wert_vor_steuer:,.0f} €")
         st.metric("ETF-Wert nach Steuer", f"{etf_wert_nach_steuer:,.0f} €")
 
-        differenz = gesamtgewinn - etf_wert_nach_steuer
+        differenz = gesamtgewinn - etf_gewinn
+     
         if differenz > 0:
             st.success(f"🏠 Immobilie besser um {differenz:,.0f} €")
         else:
