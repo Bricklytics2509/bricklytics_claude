@@ -93,7 +93,14 @@ def _kpi_card(titel, wert_str, farbe, sub):
 _GRUEN = "#1f7a3d"
 _GELB = "#b58a00"
 _ROT = "#a12b2b"
- 
+
+# ETF-Besteuerung (Aktienfonds, Privatanleger): 30% Teilfreistellung,
+# 25% Abgeltungsteuer, 5,5% Soli auf die Steuer selbst
+_ETF_TEILFREISTELLUNG = 0.30
+_ETF_ABGELTUNGSTEUER = 0.25
+_ETF_SOLI = 0.055
+_ETF_NETTOFAKTOR = 1 - (1 - _ETF_TEILFREISTELLUNG) * _ETF_ABGELTUNGSTEUER * (1 + _ETF_SOLI)
+# ergibt ca. 0.8154 statt der bisherigen 0.75
 
 from modules.afa_steuer import berechne_afa_und_steuer
 from modules.cashflow_berechnung import berechne_cashflows
@@ -279,7 +286,7 @@ def _verlauf_daten(base_state, wertsteigerung, etf_rendite):
         etf_vor += sum(zusatz_pa * ((1 + etf_rendite) ** (j - k)) for k in range(1, j + 1))
         eingezahlt_bis_j = ek + zusatz_pa * j
         etf_gewinn_brutto = etf_vor - eingezahlt_bis_j    # Zuzahlungen selbst sind KEIN Gewinn
-        v_etf = eingezahlt_bis_j + etf_gewinn_brutto * 0.75
+        v_etf = eingezahlt_bis_j + etf_gewinn_brutto * _ETF_NETTOFAKTOR
         etf_verm.append(v_etf)
         etf_gew.append(v_etf - ek)   # bewusst konsistent mit immo_gew (nur EK-Basis)
 
@@ -1251,7 +1258,7 @@ elif seite == "📊 Ergebnis":
         zusatzmonatlich, zusatzwert = 0.0, 0.0
     etf_brutto = etf_basis * ((1 + etf_rendite) ** 10) + zusatzwert
     etf_eingezahlt = etf_basis + zusatzmonatlich * 12 * 10   # EK + eingezahlte Sparraten
-    etf_wert_nach_steuer = etf_eingezahlt + (etf_brutto - etf_eingezahlt) * 0.75
+    etf_wert_nach_steuer = etf_eingezahlt + (etf_brutto - etf_eingezahlt) * _ETF_NETTOFAKTOR
     etf_gewinn_10 = etf_wert_nach_steuer - etf_eingezahlt    # Gewinn relativ zum GESAMTEN Einsatz
     immo_vs_etf = gesamtgewinn - etf_gewinn_10
  
@@ -1805,7 +1812,7 @@ elif seite == "📊 Ergebnis (alte KPIs)":
         etf_wert_vor_steuer = etf_basis * ((1 + etf_rendite) ** 10) + zusatzwert
         etf_eingezahlt = etf_basis + zusatzmonatlich * 12 * 10        # EK + alle Sparraten
         etf_gewinn_brutto = etf_wert_vor_steuer - etf_eingezahlt      # nur der Zuwachs
-        etf_wert_nach_steuer = etf_eingezahlt + etf_gewinn_brutto * 0.75  # Steuer NUR auf Gewinn
+        etf_wert_nach_steuer = etf_eingezahlt + etf_gewinn_brutto * _ETF_NETTOFAKTOR  # Steuer NUR auf Gewinn
         etf_gewinn = etf_wert_nach_steuer - etf_eingezahlt             # Gewinn ggü. Gesamteinsatz
 
         st.metric("Startkapital", f"{etf_basis:,.0f} €")
