@@ -102,6 +102,28 @@ _ETF_SOLI = 0.055
 _ETF_NETTOFAKTOR = 1 - (1 - _ETF_TEILFREISTELLUNG) * _ETF_ABGELTUNGSTEUER * (1 + _ETF_SOLI)
 # ergibt ca. 0.8154 statt der bisherigen 0.75
 
+# Grunderwerbsteuer je Bundesland (einmalige Steuer beim Immobilienkauf,
+# NICHT zu verwechseln mit der laufenden jährlichen Grundsteuer)
+GRUNDERWERBSTEUER = {
+    "Bayern": 3.5,
+    "Sachsen": 5.5,
+    "Baden-Württemberg": 5.0,
+    "Bremen": 5.0,
+    "Niedersachsen": 5.0,
+    "Rheinland-Pfalz": 5.0,
+    "Sachsen-Anhalt": 5.0,
+    "Thüringen": 5.0,
+    "Hamburg": 5.5,
+    "Berlin": 6.0,
+    "Hessen": 6.0,
+    "Mecklenburg-Vorpommern": 6.0,
+    "Brandenburg": 6.5,
+    "Nordrhein-Westfalen": 6.5,
+    "Saarland": 6.5,
+    "Schleswig-Holstein": 6.5,
+}
+BUNDESLAENDER = list(GRUNDERWERBSTEUER.keys())
+
 from modules.afa_steuer import berechne_afa_und_steuer
 from modules.cashflow_berechnung import berechne_cashflows
 from modules.vergleich import vergleichsuebersicht
@@ -447,20 +469,11 @@ if seite == "📋 Basisdaten":
     # Standortwahl mit Speicherung
     st.session_state.bundesland = st.selectbox(
         "📍 Standort",
-        ["Bayern", "Bremen","Hamburg", "Sachsen", "Schleswig Holstein"],
-        index=["Bayern", "Bremen","Hamburg", "Sachsen", "Schleswig Holstein"].index(st.session_state.get("bundesland", "Hamburg"))
+        BUNDESLAENDER,
+        index=BUNDESLAENDER.index(st.session_state.get("bundesland", "Hamburg"))
     )
 
-    if st.session_state.bundesland == "Hamburg":
-        grundsteuer_satz = 5.5
-    elif st.session_state.bundesland == "Bayern":
-        grundsteuer_satz = 3.5
-    elif st.session_state.bundesland == "Bremen":
-        grundsteuer_satz = 5.0
-    elif st.session_state.bundesland == "Sachsen":
-        grundsteuer_satz = 5.5
-    elif st.session_state.bundesland == "Schleswig Holstein":
-        grundsteuer_satz = 6.5
+    grundsteuer_satz = GRUNDERWERBSTEUER[st.session_state.bundesland]  # eigentlich Grunderwerbsteuer
     notar_grundbuch_satz = 2.0
 
     st.markdown("#### 🧑‍💼 Maklerkosten")
@@ -554,20 +567,9 @@ elif seite == "💶 Finanzierung":
     st.write(f"**Kaufpreis:** {st.session_state.kaufpreis:,.2f} €")
 
     # Steuersätze je nach Bundesland
-    if st.session_state.bundesland == "Hamburg":
-        grundsteuer_satz = 5.5
-    elif st.session_state.bundesland == "Bayern":
-        grundsteuer_satz = 3.5
-    elif st.session_state.bundesland == "Bremen":
-        grundsteuer_satz = 5.0
-    elif st.session_state.bundesland == "Schleswig Holstein":
-        grundsteuer_satz = 6.5
-    elif st.session_state.bundesland == "Sachsen":
-        grundsteuer_satz = 5.5
-    else:
-        grundsteuer_satz = 5.5  # fallback
-
+    grundsteuer_satz = GRUNDERWERBSTEUER.get(st.session_state.bundesland, 5.5)  # eigentlich Grunderwerbsteuer
     notar_grundbuch_satz = 2.0
+ 
     makler_satz = st.session_state.get("makler_satz", 3.57)
 
     nebenkosten = st.session_state.kaufpreis * (grundsteuer_satz + notar_grundbuch_satz + makler_satz) / 100
