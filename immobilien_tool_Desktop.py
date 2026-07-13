@@ -1501,6 +1501,11 @@ elif seite == "📊 Ergebnis":
     )
     st.plotly_chart(fig, use_container_width=True)
 
+    st.caption(
+        f"ℹ️ Der Rückgang zu Beginn entspricht den einmaligen Kaufnebenkosten "
+        f"({st.session_state.nebenkosten:,.0f} € für Notar, Grunderwerbsteuer, Makler) — "
+        f"kein Wertverlust der Immobilie selbst. Danach wirken Tilgung und Wertsteigerung."
+    )
 
     # Break-even-Hinweis: Ab wann liegt die Immobilie vorn?
     kreuzung = next((j for j, i, e in zip(jahre, immo_verm, etf_verm) if j > 0 and i >= e), None)
